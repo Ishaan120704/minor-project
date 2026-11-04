@@ -1,0 +1,91 @@
+services:
+  kafka:
+    image: apache/kafka:3.9.0
+    restart: unless-stopped
+    init: true
+    ports:
+      - "9094:9094"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    init: true
+    environment:
+      POSTGRES_DB: cricket_analytics
+      POSTGRES_USER: cricket
+      POSTGRES_PASSWORD: cricketpass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cricket -d cricket_analytics"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  spark:
+    build: ./spark
+    restart: unless-stopped
+    init: true
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      POSTGRES_URL: jdbc:postgresql://postgres:5432/cricket_analytics
+      POSTGRES_USER: cricket
+      POSTGRES_PASSWORD: cricketpass
+    volumes:
+      - ./spark:/app
+      - spark_checkpoints:/tmp/spark-checkpoints
+    command: >
+      /opt/spark/bin/spark-submit --master local[*]
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,org.postgresql:postgresql:42.7.3
+      /app/process_stream.py
+
+  dashboard:
+    build: ./dashboard
+    restart: unless-stopped
+    init: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: cricket_analytics
+      POSTGRES_USER: cricket
+      POSTGRES_PASSWORD: cricketpass
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/data:ro
+
+volumes:
+  postgres_data:
+  spark_checkpoints:
