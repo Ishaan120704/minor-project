@@ -27,6 +27,25 @@ services:
       timeout: 10s
       retries: 15
 
+  kafka-init:
+    image: apache/kafka:3.9.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+    command:
+      - /opt/kafka/bin/kafka-topics.sh
+      - --bootstrap-server
+      - kafka:9092
+      - --create
+      - --if-not-exists
+      - --topic
+      - deliveries
+      - --partitions
+      - "1"
+      - --replication-factor
+      - "1"
+
   postgres:
     image: postgres:16
     restart: unless-stopped
@@ -51,21 +70,24 @@ services:
     restart: unless-stopped
     init: true
     depends_on:
-      kafka:
-        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      POSTGRES_URL: jdbc:postgresql://postgres:5432/cricket_analytics
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: cricket_analytics
       POSTGRES_USER: cricket
       POSTGRES_PASSWORD: cricketpass
     volumes:
       - ./spark:/app
-      - spark_checkpoints:/tmp/spark-checkpoints
+      - ./database:/database:ro
     command: >
       /opt/spark/bin/spark-submit --master local[*]
-      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1,org.postgresql:postgresql:42.7.3
+      --conf spark.jars.ivy=/tmp/ivy
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.1
       /app/process_stream.py
 
   dashboard:
@@ -81,6 +103,7 @@ services:
       POSTGRES_DB: cricket_analytics
       POSTGRES_USER: cricket
       POSTGRES_PASSWORD: cricketpass
+      DATA_DIR: /data
     ports:
       - "8501:8501"
     volumes:
@@ -88,4 +111,3 @@ services:
 
 volumes:
   postgres_data:
-  spark_checkpoints:
